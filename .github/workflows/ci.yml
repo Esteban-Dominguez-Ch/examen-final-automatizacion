@@ -5,6 +5,12 @@ on:
     branches: [ main, 'feature/**' ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      simular_fallo:
+        description: 'Simular fallo del health check para probar el rollback'
+        type: boolean
+        default: false
 
 jobs:
   build-and-test:
@@ -80,7 +86,10 @@ jobs:
       - name: Health check del nuevo slot
         id: healthcheck
         run: |
-          if [ -f deploy/${{ steps.slots.outputs.inactive }}/examen.jar ]; then
+          if [ "${{ github.event.inputs.simular_fallo }}" = "true" ]; then
+            echo "Simulando fallo de health check (prueba de rollback)"
+            echo "status=fail" >> "$GITHUB_OUTPUT"
+          elif [ -f deploy/${{ steps.slots.outputs.inactive }}/examen.jar ]; then
             echo "Health check OK"
             echo "status=ok" >> "$GITHUB_OUTPUT"
           else
