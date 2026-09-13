@@ -47,7 +47,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
           cache: maven
-
+      
+      - name: Compilar antes de las pruebas de aceptacion
+        run: mvn -B test-compile
+ 
       - name: Acceptance tests
         run: mvn -B failsafe:integration-test failsafe:verify -Dit.test=*AT
 
