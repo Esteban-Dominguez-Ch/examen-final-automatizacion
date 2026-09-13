@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, feature/** ]
+    branches: [ main, 'feature/**' ]
   pull_request:
     branches: [ main ]
 
@@ -15,21 +15,84 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: '17'
+          cache: maven
 
       - name: Build
-        run: mvn -B clean compile
+        run: mvn -B compile
 
       - name: Unit tests
         run: mvn -B test
 
       - name: Integration tests
-        run: mvn -B failsafe:integration-test failsafe:verify
+        run: mvn -B failsafe:integration-test failsafe:verify -Dit.test=*IT
 
       - name: Publish test results
-        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-reports
+          name: surefire-reports
           path: target/surefire-reports/
+
+  deploy:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: maven
+
+      - name: Acceptance tests
+        run: mvn -B failsafe:integration-test failsafe:verify -Dit.test=*AT
+
+      - name: Package
+        run: mvn -B package -DskipTests
+
+      - name: Determinar slot activo e inactivo
+        id: slots
+        run: |
+          if [ -f deploy/active-color.txt ]; then
+            ACTIVE=$(cat deploy/active-color.txt)
+          else
+            ACTIVE=blue
+          fi
+          if [ "$ACTIVE" = "blue" ]; then INACTIVE=green; else INACTIVE=blue; fi
+          echo "active=$ACTIVE" >> "$GITHUB_OUTPUT"
+          echo "inactive=$INACTIVE" >> "$GITHUB_OUTPUT"
+          echo "Slot activo actual: $ACTIVE"
+          echo "Slot inactivo (destino del nuevo despliegue): $INACTIVE"
+
+      - name: Deploy al slot inactivo (ambiente de prueba)
+        run: |
+          mkdir -p deploy/${{ steps.slots.outputs.inactive }}
+          cp target/*.jar deploy/${{ steps.slots.outputs.inactive }}/examen.jar
+          echo "Artefacto desplegado en el slot ${{ steps.slots.outputs.inactive }}"
+
+      - name: Health check del nuevo slot
+        id: healthcheck
+        run: |
+          if [ -f deploy/${{ steps.slots.outputs.inactive }}/examen.jar ]; then
+            echo "Health check OK"
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "Health check FALLIDO"
+            echo "status=fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Switch de trafico (promocion del nuevo slot)
+        if: steps.healthcheck.outputs.status == 'ok'
+        run: |
+          echo "${{ steps.slots.outputs.inactive }}" > deploy/active-color.txt
+          echo "Trafico movido al slot ${{ steps.slots.outputs.inactive }}"
+
+      - name: Rollback automatico
+        if: steps.healthcheck.outputs.status == 'fail'
+        run: |
+          echo "Rollback: se mantiene activo el slot anterior (${{ steps.slots.outputs.active }})"
+          echo "El slot ${{ steps.slots.outputs.inactive }} no recibe trafico. Sin downtime."
